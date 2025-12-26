@@ -1,0 +1,1 @@
+pip install llama-index faiss-cpu llama-index-llms-openai llama-index-embeddings-openai
