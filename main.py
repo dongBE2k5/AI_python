@@ -191,6 +191,10 @@ async def chat(req: ChatRequest):
 async def list_files():
     return {"files": os.listdir(DATA_DIR) if os.path.exists(DATA_DIR) else []}
 
+@app.get("/api/filesdata")
+async def list_files():
+    return {"files": os.listdir(STORAGE_DIR) if os.path.exists(STORAGE_DIR) else []}
+
 @app.delete("/api/admin/files/{filename}")
 async def delete_file(filename: str):
     path = os.path.join(DATA_DIR, filename)
