@@ -1,4 +1,8 @@
 import os
+import sys
+import io
+if sys.stdout and hasattr(sys.stdout, 'buffer'):
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 import faiss
 import torch
 from llama_index.core import (
@@ -17,11 +21,12 @@ STORAGE_DIR = "storage"
 os.makedirs(STORAGE_DIR, exist_ok=True)
 
 # --- 2. CẤU HÌNH EMBEDDING MODEL (LOCAL) ---
-# Chúng ta dùng MiniLM-L6-v2 (384 chiều) - Nhẹ và hiệu quả cho tiếng Việt/Anh
+# Đã đổi sang MiniLM-L12-v2 (384 chiều) - Nhẹ và hiệu quả cho tiếng Việt/Anh
 print("⏳ Đang tải embedding model...")
 embed_model = HuggingFaceEmbedding(
-    model_name="sentence-transformers/all-MiniLM-L12-v2",
-    device="cuda" if torch.cuda.is_available() else "cpu" # Dùng GPU nếu có
+    model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    device="cuda" if torch.cuda.is_available() else "cpu", # Dùng GPU nếu có
+    normalize=True  # 🔥 quan trọng
 )
 Settings.embed_model = embed_model
 
@@ -29,8 +34,8 @@ Settings.embed_model = embed_model
 # Thay vì cắt theo độ dài, chúng ta cắt khi ý nghĩa thay đổi
 print("🧠 Đang khởi tạo Semantic Splitter...")
 splitter = SemanticSplitterNodeParser(
-    buffer_size=1, 
-    breakpoint_percentile_threshold=95, 
+    buffer_size=2,
+    breakpoint_percentile_threshold=90,
     embed_model=embed_model
 )
 
@@ -49,8 +54,9 @@ nodes = splitter.get_nodes_from_documents(documents)
 print(f"✅ Đã tạo {len(nodes)} chunks (nodes) chất lượng.")
 
 # --- 6. CẤU HÌNH KHO VECTOR FAISS ---
-dimension = 384 # Khớp với MiniLM-L6-v2
-faiss_index = faiss.IndexFlatL2(dimension)
+# BẮT BUỘC ĐỔI THÀNH 384 ĐỂ KHỚP VỚI MODEL MINILM
+dimension = 384 
+faiss_index = faiss.IndexHNSWFlat(dimension, 32)
 vector_store = FaissVectorStore(faiss_index=faiss_index)
 storage_context = StorageContext.from_defaults(vector_store=vector_store)
 

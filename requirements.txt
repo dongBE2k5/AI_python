@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+python-multipart
+python-dotenv
+faiss-cpu
+openai
+google-genai
+llama-index-core
+llama-index-vector-stores-faiss
+llama-index-embeddings-huggingface
