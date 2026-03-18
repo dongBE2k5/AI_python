@@ -47,7 +47,7 @@ genai_client = genai.Client(api_key=key_gemini)
 # --- 1. EMBEDDING MODEL (Local) ---
 # LƯU Ý: Model này cần >2GB RAM để chạy. 
 Settings.embed_model = HuggingFaceEmbedding(
-    model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    model_name="BAAI/bge-m3",
     embed_batch_size=8
 )
 
@@ -113,17 +113,25 @@ async def expand_queries(original_query):
     CHỈ trả về danh sách câu hỏi, mỗi câu một dòng."""
 
     try:
-        # Thêm await ở đây
-        response = await client.chat.completions.create(
-            model="deepseek/deepseek-r1-distill-qwen-32b",
-            messages=[{"role": "user", "content": prompt_expansion}],
-            max_tokens=300
+        # Gọi API Gemini bất đồng bộ (Lưu ý dùng client.aio)
+        response = await genai_client.aio.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt_expansion,
+            config=types.GenerateContentConfig(
+                max_output_tokens=500,
+                temperature=0.3 # Khuyên dùng temperature thấp để nó chỉ trả về đúng danh sách, không nói lảm nhảm
+            )
         )
-        content = response.choices[0].message.content.strip()
+        
+        # Lấy text từ response của Gemini chuẩn xác
+        content = response.text.strip()
         lines = content.split('\n')
+        print(content)
+        # Gộp câu hỏi gốc và các biến thể lại
         return [original_query] + [line.strip() for line in lines if line.strip()]
+        
     except Exception as e:
-        print(f"Lỗi OpenRouter: {e}")
+        print(f"❌ Lỗi gọi Gemini (Query Expansion): {e}")
         return [original_query]
 
 # --- API CHAT CHÍNH ---
@@ -172,6 +180,7 @@ async def chat(req: ChatRequest):
                 system_instruction=system_text,
                 temperature=0.8,
             ),
+
         )
         
         answer = response.text 

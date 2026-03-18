@@ -21,12 +21,12 @@ STORAGE_DIR = "storage"
 os.makedirs(STORAGE_DIR, exist_ok=True)
 
 # --- 2. CẤU HÌNH EMBEDDING MODEL (LOCAL) ---
-# Đã đổi sang MiniLM-L12-v2 (384 chiều) - Nhẹ và hiệu quả cho tiếng Việt/Anh
-print("⏳ Đang tải embedding model...")
+# Đã đổi sang BAAI/bge-m3 (1024 chiều) - Model cực mạnh hỗ trợ đa ngôn ngữ
+print("⏳ Đang tải embedding model BAAI/bge-m3...")
 embed_model = HuggingFaceEmbedding(
-    model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    model_name="BAAI/bge-m3",
     device="cuda" if torch.cuda.is_available() else "cpu", # Dùng GPU nếu có
-    normalize=True  # 🔥 quan trọng
+    normalize=True  # 🔥 quan trọng để tính toán khoảng cách vector chính xác
 )
 Settings.embed_model = embed_model
 
@@ -40,8 +40,8 @@ splitter = SemanticSplitterNodeParser(
 )
 
 # --- 4. ĐỌC TÀI LIỆU ---
-if not os.path.exists(DATA_DIR):
-    os.makedirs(DATA_DIR)
+if not os.path.exists(DATA_DIR) or not os.listdir(DATA_DIR):
+    os.makedirs(DATA_DIR, exist_ok=True)
     print(f"⚠️ Thư mục '{DATA_DIR}' trống. Hãy bỏ file PDF/Docx vào đó rồi chạy lại.")
     exit()
 
@@ -54,8 +54,8 @@ nodes = splitter.get_nodes_from_documents(documents)
 print(f"✅ Đã tạo {len(nodes)} chunks (nodes) chất lượng.")
 
 # --- 6. CẤU HÌNH KHO VECTOR FAISS ---
-# BẮT BUỘC ĐỔI THÀNH 384 ĐỂ KHỚP VỚI MODEL MINILM
-dimension = 384 
+# BẮT BUỘC ĐỔI THÀNH 1024 ĐỂ KHỚP VỚI MODEL BGE-M3
+dimension = 1024 
 faiss_index = faiss.IndexHNSWFlat(dimension, 32)
 vector_store = FaissVectorStore(faiss_index=faiss_index)
 storage_context = StorageContext.from_defaults(vector_store=vector_store)
@@ -77,6 +77,9 @@ index.storage_context.persist(persist_dir=STORAGE_DIR)
 faiss.write_index(faiss_index, os.path.join(STORAGE_DIR, "faiss.index"))
 
 print("\n" + "="*30)
-print("✅ THÀNH CÔNG: FAISS Index đã sẵn sàng!")
+print("✅ THÀNH CÔNG: FAISS Index đã sẵn sàng với BAAI/bge-m3!")
 print(f"📍 Vị trí lưu: {STORAGE_DIR}")
 print("="*30)
+
+
+
