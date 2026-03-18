@@ -8,3 +8,4 @@ google-genai
 llama-index-core
 llama-index-vector-stores-faiss
 llama-index-embeddings-huggingface
+google-cloud-aiplatform

@@ -1,0 +1,10 @@
+[
+    {
+        "role": "user",
+        "content": "Chuẩn đầu ra tiếng Anh là gì?"
+    },
+    {
+        "role": "assistant",
+        "content": "Dựa trên tài liệu được cung cấp, chuẩn đầu ra tiếng Anh được quy định như sau:\n\n**1. Đối với trình độ Cao đẳng:**\n\n*   **Ngành Tiếng Anh (Tất cả các khóa):**\n    *   Có chứng chỉ Tiếng Anh IELTS quốc tế đạt từ 4.5 điểm trở lên.\n    *   Hoặc có chứng chỉ Tiếng Anh đáp ứng chuẩn đầu ra tương đương còn hiệu lực.\n    *   Hoặc được đánh giá đạt trong kỳ thi đánh giá năng lực Tiếng Anh chuẩn đầu ra dành cho ngành Tiếng Anh do Trường Cao đẳng Công nghệ Thủ Đức tổ chức.\n    *   Và học, đạt các học phần ngoại ngữ thứ hai được quy định trong chương trình đào tạo.\n\n*   **Các ngành không chuyên ngữ (Tất cả các khóa):**\n    *   Có chứng chỉ Tiếng Anh TOEIC 350 quốc tế.\n    *   Hoặc chứng chỉ Tiếng Anh đáp ứng chuẩn đầu ra tương đương còn hiệu lực.\n    *   Hoặc được đánh giá đạt trong kỳ thi đánh giá năng lực Tiếng Anh chuẩn đầu ra do Trường Cao đẳng Công nghệ Thủ Đức tổ chức.\n\n**2. Đối với trình độ Trung cấp:**\n\n*   **Các ngành không chuyên ngữ (Từ khóa 2018 trở về sau):**\n    *   Học và đạt các học phần ngoại ngữ được quy định trong chương trình đào tạo."
+    }
+]
