@@ -11,21 +11,22 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 from contextlib import asynccontextmanager
 
-# OpenAI Client
+# Đổi từ OpenAI sang AsyncOpenAI để không làm treo server
 from openai import AsyncOpenAI 
+
+# --- IMPORT GOOGLE GENAI (UNIFIED SDK) ---
+from google import genai
+from google.genai import types 
 
 # --- LlamaIndex Core ---
 from llama_index.core import StorageContext, load_index_from_storage, Settings
 from llama_index.vector_stores.faiss import FaissVectorStore
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 
-# --- VERTEX AI IMPORT ---
-import vertexai
-from vertexai.generative_models import GenerativeModel
-
+# Load biến môi trường từ file .env
 load_dotenv()
 
-# --- CẤU HÌNH ---
+# --- CẤU HÌNH THƯ MỤC & FILE ---
 STORAGE_DIR = "storage"
 DATA_DIR = "data"
 HISTORY_FILE = "chat_history.json"
@@ -33,25 +34,34 @@ HISTORY_FILE = "chat_history.json"
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(STORAGE_DIR, exist_ok=True)
 
+# --- KHỞI TẠO CÁC CLIENT AI ---
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
-# --- KHỞI TẠO VERTEX AI ---
-# Đảm bảo bạn đã set biến môi trường GOOGLE_APPLICATION_CREDENTIALS trỏ tới file JSON Service Account
-vertexai.init(project=os.getenv("PROJECT_ID"), location=os.getenv("LOCATION"))
-
-# --- KHỞI TẠO CLIENT OPENAI (Async) ---
+# 1. Khởi tạo Client OpenAI (cho OpenRouter nếu bạn cần dùng)
 client = AsyncOpenAI(
     base_url="https://openrouter.ai/api/v1",
     api_key=OPENROUTER_API_KEY,
 )
 
-# --- 1. EMBEDDING MODEL (Local) ---
+# 2. Khởi tạo Client Gemini (Sử dụng Vertex AI qua Unified SDK)
+# Lưu ý: File .env phải có cấu hình GOOGLE_APPLICATION_CREDENTIALS chuẩn xác
+project_id = os.getenv("PROJECT_ID")
+location = os.getenv("LOCATION") # Thường là "us-central1"
+
+genai_client = genai.Client(
+    vertexai=True, 
+    project=project_id, 
+    location=location
+)
+
+# --- CẤU HÌNH EMBEDDING MODEL (Local) ---
+# LƯU Ý: Model này cần >2GB RAM để chạy. 
 Settings.embed_model = HuggingFaceEmbedding(
     model_name="BAAI/bge-m3",
     embed_batch_size=8
 )
 
-# --- XỬ LÝ LỊCH SỬ (JSON) ---
+# --- HÀM XỬ LÝ LỊCH SỬ (JSON) ---
 def load_history():
     if os.path.exists(HISTORY_FILE):
         try:
@@ -65,7 +75,7 @@ def save_history(messages):
     with open(HISTORY_FILE, "w", encoding="utf-8") as f:
         json.dump(messages, f, ensure_ascii=False, indent=4)
 
-# --- HÀM LOAD DỮ LIỆU ---
+# --- HÀM LOAD DỮ LIỆU KNOWLEDGE BASE ---
 def load_knowledge_base(app_instance: FastAPI):
     print("🔄 Đang nạp dữ liệu từ Storage vào RAM...")
     faiss_path = os.path.join(STORAGE_DIR, "faiss.index")
@@ -92,6 +102,7 @@ async def lifespan(app: FastAPI):
     load_knowledge_base(app)
     yield
 
+# --- KHỞI TẠO FASTAPI ---
 app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
@@ -105,7 +116,7 @@ app.add_middleware(
 class ChatRequest(BaseModel):
     prompt: str
 
-# --- QUERY EXPANSION (Đã chuyển đổi sang Vertex AI) ---
+# --- TÍNH NĂNG: QUERY EXPANSION ---
 async def expand_queries(original_query):
     prompt_expansion = f"""Bạn là chuyên gia tra cứu. 
     Viết lại câu hỏi gốc thành 3 biến thể tìm kiếm (xử lý từ đồng nghĩa Tiếng Trung/Hoa, Anh/TOEIC).
@@ -113,28 +124,26 @@ async def expand_queries(original_query):
     CHỈ trả về danh sách câu hỏi, mỗi câu một dòng."""
 
     try:
-        # Sử dụng model Gemini 1.5 Flash (phiên bản chuẩn trên Vertex AI hiện tại)
-        expansion_model = GenerativeModel("gemini-2.5-flash")
-        
-        # Gọi API bất đồng bộ
-        response = await expansion_model.generate_content_async(
-            prompt_expansion,
-            generation_config={
-                "max_output_tokens": 500,
-                "temperature": 0.3
-            }
+        # Gọi API Gemini bất đồng bộ qua Vertex AI
+        response = await genai_client.aio.models.generate_content(
+            model="gemini-1.5-flash",
+            contents=prompt_expansion,
+            config=types.GenerateContentConfig(
+                max_output_tokens=500,
+                temperature=0.3
+            )
         )
         
         content = response.text.strip()
         lines = content.split('\n')
-        print(content)
+        print(f"📝 Query Expansion: \n{content}")
         return [original_query] + [line.strip() for line in lines if line.strip()]
         
     except Exception as e:
-        print(f"❌ Lỗi gọi Vertex AI (Query Expansion): {e}")
+        print(f"❌ Lỗi gọi Gemini (Query Expansion): {e}")
         return [original_query]
 
-# --- API CHAT CHÍNH ---
+# --- API: CHAT CHÍNH (/api/chat) ---
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
     if not hasattr(app.state, 'retriever'):
@@ -142,7 +151,7 @@ async def chat(req: ChatRequest):
 
     # 1. Tìm kiếm dữ liệu (RAG)
     queries = await expand_queries(req.prompt)
-    print(f"🔍 Queries: {queries}")
+    print(f"🔍 Đang tìm kiếm với các queries: {queries}")
 
     all_nodes = []
     for q in queries:
@@ -155,34 +164,32 @@ async def chat(req: ChatRequest):
     
     context_text = "\n---\n".join(unique_contents.values())[:12000]
 
-    # 2. Xử lý Lịch sử
+    # 2. Xử lý Lịch sử Chat
     history = load_history()
 
-    # 3. Chuẩn bị Format và Model cho Vertex AI
-    system_text = f"Bạn là trợ lý tư vấn sinh viên TDC. Dựa vào nội dung này để trả lời: {context_text}. Chỉ trả lời câu hỏi dựa trên tài liệu được cung cấp."
+    # 3. Chuẩn bị Format cho Gemini
+    system_text = f"Bạn là trợ lý tư vấn sinh viên TDC (Trường Cao đẳng Công nghệ Thủ Đức). Dựa vào nội dung này để trả lời: {context_text}. Chỉ trả lời câu hỏi dựa trên tài liệu được cung cấp."
     
-    # Vertex AI yêu cầu truyền system_instruction lúc khởi tạo model
-    chat_model = GenerativeModel(
-        model_name="gemini-2.5-flash",
-        system_instruction=[system_text]
-    )
-    
-    vertex_messages = []
+    gemini_messages = []
+    # Lấy 10 tin nhắn gần nhất làm ngữ cảnh
     for msg in history[-10:]:
         role = "model" if msg["role"] == "assistant" else "user"
-        vertex_messages.append({"role": role, "parts": [{"text": msg["content"]}]})
+        gemini_messages.append({"role": role, "parts": [{"text": msg["content"]}]})
     
-    vertex_messages.append({"role": "user", "parts": [{"text": req.prompt}]})
+    # Thêm câu hỏi hiện tại vào
+    gemini_messages.append({"role": "user", "parts": [{"text": req.prompt}]})
     history.append({"role": "user", "content": req.prompt})
     
-    # 4. Gọi AI qua Vertex
+    # 4. Gọi AI Gemini qua Vertex AI
     try:
-        print("🤖 Đang gọi Vertex AI...")
-        response = await chat_model.generate_content_async(
-            contents=vertex_messages,
-            generation_config={
-                "temperature": 0.8
-            }
+        print("🤖 Đang gọi Vertex AI (Unified SDK)...")
+        response = await genai_client.aio.models.generate_content(
+            model="gemini-1.5-flash",
+            contents=gemini_messages,
+            config=types.GenerateContentConfig(
+                system_instruction=system_text,
+                temperature=0.8,
+            )
         )
         
         answer = response.text 
@@ -197,13 +204,13 @@ async def chat(req: ChatRequest):
         print(f"❌ Lỗi AI: {e}")
         raise HTTPException(status_code=500, detail=f"Lỗi AI: {str(e)}")
 
-# --- API ADMIN (Giữ nguyên) ---
+# --- API: ADMIN QUẢN LÝ FILE & INDEX ---
 @app.get("/api/admin/files")
 async def list_files():
     return {"files": os.listdir(DATA_DIR) if os.path.exists(DATA_DIR) else []}
 
 @app.get("/api/filesdata")
-async def list_files_data():
+async def list_filesdata():
     return {"files": os.listdir(STORAGE_DIR) if os.path.exists(STORAGE_DIR) else []}
 
 @app.delete("/api/admin/files/{filename}")
@@ -223,7 +230,7 @@ async def upload_file(file: UploadFile = File(...)):
 
 @app.post("/api/admin/rebuild-index")
 async def rebuild_index():
-    print("🚀 Rebuild Index (Async)...")
+    print("🚀 Đang chạy Rebuild Index (Async)...")
     try:
         loop = asyncio.get_running_loop()
         def run_script():
@@ -240,15 +247,17 @@ async def rebuild_index():
             raise HTTPException(status_code=500, detail=f"Lỗi Script: {process.stderr}")
         
         if load_knowledge_base(app):
+            # Xóa lịch sử cũ khi có dữ liệu mới
             if os.path.exists(HISTORY_FILE):
                 os.remove(HISTORY_FILE)
             return {"message": "Cập nhật thành công! Đã reset lịch sử chat.", "output": process.stdout}
         else:
-            raise HTTPException(status_code=500, detail="Nạp RAM thất bại")
+            raise HTTPException(status_code=500, detail="Nạp dữ liệu vào RAM thất bại")
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# --- KHỞI CHẠY SERVER ---
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8080))
