@@ -126,7 +126,7 @@ async def expand_queries(original_query):
     try:
         # Gọi API Gemini bất đồng bộ qua Vertex AI
         response = await genai_client.aio.models.generate_content(
-            model="gemini-1.5-flash",
+            model="gemini-2.5-flash",
             contents=prompt_expansion,
             config=types.GenerateContentConfig(
                 max_output_tokens=500,
@@ -184,7 +184,7 @@ async def chat(req: ChatRequest):
     try:
         print("🤖 Đang gọi Vertex AI (Unified SDK)...")
         response = await genai_client.aio.models.generate_content(
-            model="gemini-1.5-flash",
+            model="gemini-2.5-flash",
             contents=gemini_messages,
             config=types.GenerateContentConfig(
                 system_instruction=system_text,
