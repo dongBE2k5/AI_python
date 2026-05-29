@@ -6,3 +6,8 @@ __pycache__/
 .git
 # storage/
 chat_history.json
+config.json
+.history/
+README.md
+<!-- vertex-key.json -->
+venv/

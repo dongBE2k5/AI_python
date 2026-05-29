@@ -44,7 +44,6 @@ client = AsyncOpenAI(
 )
 
 # 2. Khởi tạo Client Gemini (Sử dụng Vertex AI qua Unified SDK)
-# Lưu ý: File .env phải có cấu hình GOOGLE_APPLICATION_CREDENTIALS chuẩn xác
 project_id = os.getenv("PROJECT_ID")
 location = os.getenv("LOCATION") # Thường là "us-central1"
 
@@ -55,25 +54,43 @@ genai_client = genai.Client(
 )
 
 # --- CẤU HÌNH EMBEDDING MODEL (Local) ---
-# LƯU Ý: Model này cần >2GB RAM để chạy. 
 Settings.embed_model = HuggingFaceEmbedding(
     model_name="BAAI/bge-m3",
     embed_batch_size=8
 )
 
-# --- HÀM XỬ LÝ LỊCH SỬ (JSON) ---
-def load_history():
+def load_all_history():
+    """Đọc toàn bộ dữ liệu của tất cả mọi người từ file JSON"""
     if os.path.exists(HISTORY_FILE):
         try:
             with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+                # Nếu đọc lên mà thấy là List (cấu trúc cũ), thì reset thành Dict
+                if isinstance(data, list):
+                    return {}
+                return data
         except: 
-            return []
-    return []
+            return {}
+    return {}
 
-def save_history(messages):
+# --- HÀM XỬ LÝ LỊCH SỬ (JSON) ---
+def load_history(session_id: str):
+    """Trích xuất lịch sử của đúng người dùng đang chat"""
+    all_history = load_all_history()
+    # Lấy data của session_id, nếu chưa có thì trả về mảng rỗng []
+    return all_history.get(session_id, [])
+
+
+def save_history(session_id: str, messages: list):
+    """Cập nhật lại đoạn chat của người dùng vào file chung"""
+    all_history = load_all_history()
+    
+    # Ghi đè lịch sử mới của người này vào tổng thể
+    all_history[session_id] = messages
+    
+    # Lưu toàn bộ cục tổng thể đó xuống lại file
     with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-        json.dump(messages, f, ensure_ascii=False, indent=4)
+        json.dump(all_history, f, ensure_ascii=False, indent=4)
 
 # --- HÀM LOAD DỮ LIỆU KNOWLEDGE BASE ---
 def load_knowledge_base(app_instance: FastAPI):
@@ -114,17 +131,17 @@ app.add_middleware(
 )
 
 class ChatRequest(BaseModel):
+    session_id: str
     prompt: str
 
-# --- TÍNH NĂNG: QUERY EXPANSION ---
+# --- TÍNH NĂNG: QUERY EXPANSION (ĐÃ THÊM TRẢ VỀ TOKEN) ---
 async def expand_queries(original_query):
     prompt_expansion = f"""Bạn là chuyên gia tra cứu. 
     Viết lại câu hỏi gốc thành 3 biến thể tìm kiếm (xử lý từ đồng nghĩa Tiếng Trung/Hoa, Anh/TOEIC).
     Câu hỏi gốc: "{original_query}"
-    CHỈ trả về danh sách câu hỏi, mỗi câu một dòng."""
+    CHỈ trả về danh sách câu hỏi, mỗi câu một dòng và bằng tiếng việt."""
 
     try:
-        # Gọi API Gemini bất đồng bộ qua Vertex AI
         response = await genai_client.aio.models.generate_content(
             model="gemini-2.5-flash",
             contents=prompt_expansion,
@@ -136,12 +153,17 @@ async def expand_queries(original_query):
         
         content = response.text.strip()
         lines = content.split('\n')
-        print(f"📝 Query Expansion: \n{content}")
-        return [original_query] + [line.strip() for line in lines if line.strip()]
+        
+        # Lấy số token đã dùng cho Query Expansion
+        usage = response.usage_metadata
+        expansion_tokens = usage.total_token_count if usage else 0
+        
+        print(f"📝 Query Expansion (Dùng {expansion_tokens} tokens): \n{content}")
+        return [original_query] + [line.strip() for line in lines if line.strip()], expansion_tokens
         
     except Exception as e:
         print(f"❌ Lỗi gọi Gemini (Query Expansion): {e}")
-        return [original_query]
+        return [original_query], 0
 
 # --- API: CHAT CHÍNH (/api/chat) ---
 @app.post("/api/chat")
@@ -149,8 +171,8 @@ async def chat(req: ChatRequest):
     if not hasattr(app.state, 'retriever'):
         raise HTTPException(status_code=400, detail="Hệ thống chưa có dữ liệu. Vui lòng Rebuild Index.")
 
-    # 1. Tìm kiếm dữ liệu (RAG)
-    queries = await expand_queries(req.prompt)
+    # 1. Tìm kiếm dữ liệu (RAG) - Lấy thêm thông tin token từ expansion
+    queries, expansion_tokens = await expand_queries(req.prompt)
     print(f"🔍 Đang tìm kiếm với các queries: {queries}")
 
     all_nodes = []
@@ -165,18 +187,15 @@ async def chat(req: ChatRequest):
     context_text = "\n---\n".join(unique_contents.values())[:12000]
 
     # 2. Xử lý Lịch sử Chat
-    history = load_history()
-
+    history = load_history(req.session_id)
     # 3. Chuẩn bị Format cho Gemini
     system_text = f"Bạn là trợ lý tư vấn sinh viên TDC (Trường Cao đẳng Công nghệ Thủ Đức). Dựa vào nội dung này để trả lời: {context_text}. Chỉ trả lời câu hỏi dựa trên tài liệu được cung cấp."
     
     gemini_messages = []
-    # Lấy 10 tin nhắn gần nhất làm ngữ cảnh
     for msg in history[-10:]:
         role = "model" if msg["role"] == "assistant" else "user"
         gemini_messages.append({"role": role, "parts": [{"text": msg["content"]}]})
     
-    # Thêm câu hỏi hiện tại vào
     gemini_messages.append({"role": "user", "parts": [{"text": req.prompt}]})
     history.append({"role": "user", "content": req.prompt})
     
@@ -194,11 +213,31 @@ async def chat(req: ChatRequest):
         
         answer = response.text 
         
+        # --- ĐẾM TOKEN CHÍNH TẠI ĐÂY ---
+        usage = response.usage_metadata
+        prompt_tokens = usage.prompt_token_count if usage else 0
+        completion_tokens = usage.candidates_token_count if usage else 0
+        chat_tokens = usage.total_token_count if usage else 0
+        
+        # Tổng token của cả Request (Mở rộng câu hỏi + Chat chính)
+        total_tokens = expansion_tokens + chat_tokens
+        
         # 5. Lưu Lịch sử 
         history.append({"role": "assistant", "content": answer})
-        save_history(history)
-
-        return {"reply": answer}
+        save_history(req.session_id, history)
+        print("Số token đã dùng - Expansion:", expansion_tokens, "| Chat:", chat_tokens, "| Tổng:", total_tokens)
+        print("contens gửi",gemini_messages)
+        # Trả về câu trả lời kèm theo thống kê token
+        return {
+            "reply": answer,
+            "usage": {
+                "expansion_tokens": expansion_tokens,
+                "chat_prompt_tokens": prompt_tokens,
+                "chat_completion_tokens": completion_tokens,
+                "chat_total_tokens": chat_tokens,
+                "total_request_tokens": total_tokens
+            }
+        }
 
     except Exception as e:
         print(f"❌ Lỗi AI: {e}")
@@ -247,7 +286,6 @@ async def rebuild_index():
             raise HTTPException(status_code=500, detail=f"Lỗi Script: {process.stderr}")
         
         if load_knowledge_base(app):
-            # Xóa lịch sử cũ khi có dữ liệu mới
             if os.path.exists(HISTORY_FILE):
                 os.remove(HISTORY_FILE)
             return {"message": "Cập nhật thành công! Đã reset lịch sử chat.", "output": process.stdout}

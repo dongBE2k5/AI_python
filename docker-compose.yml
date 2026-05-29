@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  ai-backend:
+    image: tdc-chat-ai:v1
+    container_name: tdc-backend
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    volumes:
+      - ./storage:/app/storage
+      - ./chat_history.json:/app/chat_history.json
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.80'     # Giới hạn 80% của 1 Core
+          memory: 2G       # Giới hạn AI không được ăn quá 1GB RAM
+        reservations:
+          cpus: '0.10'
+          memory: 256M
